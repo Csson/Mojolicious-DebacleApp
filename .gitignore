@@ -1,0 +1,7 @@
+/Mojolicious-Command-generate-debacle_app-*
+/.build
+/_build*
+/Build
+MYMETA.*
+!META.json
+/.prove
