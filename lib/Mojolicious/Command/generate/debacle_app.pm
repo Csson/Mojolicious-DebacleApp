@@ -23,14 +23,12 @@ sub run {
     }
 
     # start script
-    {
-        my $name = class_to_file $class;
-        $self->render_to_rel_file('start', "$name/script/$name", $class);
-    }
+    my $name = class_to_file $class;
+    $self->render_to_rel_file('start', "$name/script/$name", $class);
 
     # application class
     {
-        my $appclass = class_to_path $class;
+        my $app = class_to_path $class;
         $self->render_to_rel_file('appclass', "$name/lib/$app", $class);
     }
 
@@ -48,11 +46,17 @@ sub run {
         $self->render_to_rel_file('schema', "$name/lib/$schemapath", $schema);
     }
 
+    # db
+    {
+        my $db = "${class}::DB";
+        my $dbpath = class_to_path $db;
+        $self->render_to_rel_file('db', "$name/lib/$dbpath", $db, $class);
+    }
     # candy
     {
         my $candy = "${class}::Schema::Candy";
         my $candypath = class_to_path $candy;
-        $self->render_to_rel_file('candy', "$name/lib/$candypath", $candy);
+        $self->render_to_rel_file('candy', "$name/lib/$candypath", $candy, $class);
     }
 
     # result
@@ -81,9 +85,15 @@ sub run {
         $self->render_to_rel_file('index', "$name/templates/example/index.html.ep");
     }
 
+    # db deploy
+    {
+        $self->render_to_rel_file('dbdeploy', "$name/script/db-deploy.pl", $class);
+    }
+
+
     # log directory
     {
-        $self->create_rel_directory("$name/log");
+        $self->create_rel_dir("$name/log");
     }
 
     # test
@@ -134,6 +144,10 @@ package <%= $class %> {
 
         $app->secrets($config->{'secrets'});
         $app->defaults(layout => 'default');
+
+        $app->helper(db => sub {
+            <%= $class %>::DB->new(config => $config->{'db'});
+        })
     }
 
 }
@@ -166,23 +180,53 @@ package <%= $class %> {
 }
 
 
+@@ db
+% my $class = shift;
+% my $app_class = shift;
+package <%= $class %> {
+    use Mojo::Base -base;
+    use Syntax::Collection::Basic;
+    use Kavorka;
+
+    has 'config';
+    has 'schema';
+
+    use vars $AUTOLOAD;
+
+    after new {
+        $self->schema = <%= $app_class %>::Schema->connect(
+            $self->config->{'dsn'},
+            $self->config->{'user'},
+            $self->config->{'password'},
+            $self->config->{'extra'}
+        );
+    }
+
+    method AUTOLOAD {
+        my $resultset = $AUTOLOAD;
+        $resultset =~ s{^<%= $app_class %>::DB::}{};
+        return $self->schema->resultset($resultset);
+    }
+
+}
+
 @@ candy
-my $class = shift;
-my $base = $class; $base =~ s{^(\w+).*}{$1};
+% my $class = shift;
+% my $app_class = shift;
 package <%= $class %> {
     use base 'DBIx::Class::Candy';
 
     use Syntax::Collection::Basic;
     use String::CamelCase;
 
-    sub base { $_[1] || '<%= $base %>::Schema::Result' }
+    sub base { $_[1] || '<%= $app_class %>::Schema::Result' }
     sub autotable { 1 }
 
     sub gen_table {
         my $self = shift;
         my $resultclass = shift;
 
-        $resultclass =~ s{^<%= $class %>::Schema::Result::}{};
+        $resultclass =~ s{^<%= $app_class %>::Schema::Result::}{};
         $resultclass =~ s{::}{__}g;
         $resultclass = String::CamelCase::decamelize($resultclass);
 
@@ -194,6 +238,7 @@ package <%= $class %> {
 
 @@ result
 % my $class = shift;
+% my $base = $class; $base =~ s{^(\w+).*}{$1};
 package <%= $class %> {
     use parent 'DBIx::Class::Core';
 
@@ -204,17 +249,52 @@ package <%= $class %> {
         InflateColumn::DateTime
     /);
 
-    sub default_result_namespace { '<%= $class %>::Schema::Result' }
+    sub default_result_namespace { '<%= $base %>::Schema::Result' }
 
 }
 
-@@ ResultSet
+@@ resultset
 % my $class = shift;
 package <%= $class %> {
     use base 'DBIx::Class::ResultSet';
 
+    use Syntax::Collection::Basic;
+
 }
 
+
+@@ dbdeploy
+% my $app_class = shift;
+#!/usr/bin/env perl
+
+use Syntax::Collection::Basic;
+<%= $app_class %>::Inline::App::DeployDB->new_with_syntax->run;
+
+package <%= $app_class %>::Inline::App::DeployDB {
+    use MooseX::App::Simple;
+    use Config::Hash;
+    use Dir::Self;
+
+    use lib __DIR__ . '/../lib';
+
+    use <%= $app_class %>::Schema;
+
+    sub run {
+        db();
+    }
+
+    method db {
+        my $config = Config::Hash->new(
+            filename => __DIR__ . '/../share/config-secret.conf',
+            data => Config::Hash->new(filename => __DIR__ . '/../share/config.conf')->data
+        )->data->{'db'};
+
+        my $db = <%= $app_class %>::Schema->connect($config->{'dsn'}, $config->{'user'}, $config->{'password'}, $config->{'extra'});
+
+        $db->deploy;
+        say 'db deploy done.';
+    }
+}
 
 @@ config_standard
 {
