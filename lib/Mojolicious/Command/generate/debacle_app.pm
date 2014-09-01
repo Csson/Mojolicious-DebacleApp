@@ -3,103 +3,80 @@ package Mojolicious::Command::generate::debacle_app;
 
 our $VERSION = '0.01';
 
-use Syntax::Collection::Basic;
+use strict;
+use warnings;
+use true;
+
 use Mojo::Base 'Mojolicious::Command';
 use Mojo::Util qw/class_to_file class_to_path/;
 
 use String::Random;
 
-has description => 'Generate Mojolicious application directory structure (with dbix)';
+use 5.020;
+use experimental 'postderef';
+
+has description => 'Generate Mojolicious application directory structure (with dbix and more)';
 has usage       => sub { shift->extract_usage };
 
 sub run {
     my $self = shift;
-    my $class = shift;
+    my $app = shift;
 
-    $class ||= 'MyApp';
+    $app ||= 'MyApp';
 
-    if($class !~ m{^[A-Z](?:\w|::)+$}) {
+    if($app !~ m{^[A-Z](?:\w|::)+$}) {
         die qq{Your application name has to be a well formed (CamelCase) Perl module name, like MyApp};
     }
 
     # start script
-    my $name = class_to_file $class;
-    $self->render_to_rel_file('start', "$name/script/$name", $class);
+    my $basepath = class_to_file $app;
+    $self->render_to_rel_file('start', "$basepath/script/$basepath", $app);
+    
+    my $classes = {
+        appclass     => [],
+        controller   => ['Controller::Example'],
+        schema       => ['Schema'],
+        schema_candy => ['Schema::Candy'],
+        db           => ['DB'],
+        result       => ['Schema::Result'],
+        resultset    => ['Schema::ResultSet'],
+        
 
-    # application class
-    {
-        my $app = class_to_path $class;
-        $self->render_to_rel_file('appclass', "$name/lib/$app", $class);
-    }
+    };
 
-    # controller
-    {
-        my $controller = "${class}::Controller::Example";
-        my $path = class_to_path $controller;
-        $self->render_to_rel_file('controller', "$name/lib/$path", $controller);
-    }
-
-    # schema
-    {
-        my $schema = "${class}::Schema";
-        my $schemapath = class_to_path $schema;
-        $self->render_to_rel_file('schema', "$name/lib/$schemapath", $schema);
-    }
-
-    # db
-    {
-        my $db = "${class}::DB";
-        my $dbpath = class_to_path $db;
-        $self->render_to_rel_file('db', "$name/lib/$dbpath", $db, $class);
-    }
-    # candy
-    {
-        my $candy = "${class}::Schema::Candy";
-        my $candypath = class_to_path $candy;
-        $self->render_to_rel_file('candy', "$name/lib/$candypath", $candy, $class);
-    }
-
-    # result
-    {
-        my $result = "${class}::Schema::Result";
-        my $resultpath = class_to_path $result;
-        $self->render_to_rel_file('result', "$name/lib/$resultpath", $result);
-    }
-
-    # resultset
-    {
-        my $resultset = "${class}::Schema::ResultSet";
-        my $resultsetpath = class_to_path $resultset;
-        $self->render_to_rel_file('resultset', "$name/lib/$resultsetpath", $resultset);
-    }
-
-    # config
-    {
-        $self->render_to_rel_file('config_standard', "$name/share/config.conf");
-        $self->render_to_rel_file('config_secret', "$name/share/config-secret.conf");
-    }
-
-    # templates
-    {
-        $self->render_to_rel_file('layout', "$name/templates/layouts/default.html.ep");
-        $self->render_to_rel_file('index', "$name/templates/example/index.html.ep");
-    }
-
-    # db deploy
-    {
-        $self->render_to_rel_file('dbdeploy', "$name/script/db-deploy.pl", $class);
+    while(my($template, $args) = each $classes->%*) {
+        my $class = $app . (scalar $args->@* ? shift $args->@* : '');
+        my $path = class_to_path $app . $class;
+        $self->render_to_rel_file($template, "$basepath/lib/$path", $class, $args->@*);
     }
 
 
-    # log directory
-    {
-        $self->create_rel_dir("$name/log");
+    my $files = {
+        config_standard => [share => 'config.conf'],
+        config_secret   => [share => 'config-secret.conf'],
+
+        layout          => ['templates/layouts', 'default.html.ep'],
+        index           => ['templates/example', 'index.html.ep'],
+
+        dbdeploy        => [script => 'db-deploy.pl', $app],
+
+        test            => [t => 'basic.t', $app],
+
+    };
+
+    while(my($template, $args) = each $files->%*) {
+        my $dir = shift $args->@*;
+        my $filename shift $args->@*;
+        $self->render_to_rel_file($template, "$basepath/$dir/$filename", $args->@*);
     }
 
-    # test
-    {
-        $self->render_to_rel_file('test', "$name/t/basic.t", $class);
+    my @directories = qw/log/;
+
+    foreach my $dir (@directories) {
+        $self->create_rel_dir("$basepath/$dir");
     }
+
+
 }
 
 1;
@@ -210,7 +187,7 @@ package <%= $class %> {
 
 }
 
-@@ candy
+@@ schema_candy
 % my $class = shift;
 % my $app_class = shift;
 package <%= $class %> {
@@ -349,7 +326,7 @@ __END__
 
 =head1 NAME
 
-Mojolicious::Command::generate::debacle_app - Create Mojolicious app with some DBIx
+Mojolicious::Command::generate::debacle_app - Create Mojolicious app with DBIx and more
 
 =head1 SYNOPSIS
 
