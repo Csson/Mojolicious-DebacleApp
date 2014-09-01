@@ -66,7 +66,7 @@ sub run {
 
     while(my($template, $args) = each $files->%*) {
         my $dir = shift $args->@*;
-        my $filename shift $args->@*;
+        my $filename = shift $args->@*;
         $self->render_to_rel_file($template, "$basepath/$dir/$filename", $args->@*);
     }
 
