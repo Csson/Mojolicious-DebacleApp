@@ -1,6 +1,5 @@
 package Mojolicious::Command::generate::debacle_app;
 
-
 our $VERSION = '0.01';
 
 use strict;
@@ -10,7 +9,11 @@ use true;
 use Mojo::Base 'Mojolicious::Command';
 use Mojo::Util qw/class_to_file class_to_path/;
 
+use Dist::Milla::App;
 use String::Random;
+use IPC::Run qw/timeout/;
+use Dist::Zilla;
+#use Dist::Zilla::Minting::Profile;
 
 use 5.020;
 use experimental 'postderef';
@@ -28,25 +31,31 @@ sub run {
         die qq{Your application name has to be a well formed (CamelCase) Perl module name, like MyApp};
     }
 
+    my $basepath = $app =~ s{::}{-}gr;
+
+    {
+        IPC::Run::run ['dzil', 'new', '-P', 'TheBest', '-p', 'milla', $app];
+        #exec("milla new $app");
+    }
+
     # start script
-    my $basepath = class_to_file $app;
     $self->render_to_rel_file('start', "$basepath/script/$basepath", $app);
     
     my $classes = {
         appclass     => [],
         controller   => ['Controller::Example'],
         schema       => ['Schema'],
-        schema_candy => ['Schema::Candy'],
-        db           => ['DB'],
-        result       => ['Schema::Result'],
+        schema_candy => ['Schema::Candy', $app],
+        db           => ['DB', $app],
+        result       => ['Schema::Result', $app],
         resultset    => ['Schema::ResultSet'],
         
 
     };
 
     while(my($template, $args) = each $classes->%*) {
-        my $class = $app . (scalar $args->@* ? shift $args->@* : '');
-        my $path = class_to_path $app . $class;
+        my $class = $app . (scalar $args->@* ? '::'.shift $args->@* : '');
+        my $path = class_to_path $class;
         $self->render_to_rel_file($template, "$basepath/lib/$path", $class, $args->@*);
     }
 
@@ -76,7 +85,6 @@ sub run {
         $self->create_rel_dir("$basepath/$dir");
     }
 
-
 }
 
 1;
@@ -86,7 +94,6 @@ __DATA__
 % my $class = shift;
 #!/usr/bin/env perl
 
-use Syntax::Collection::Basic;
 use FindBin;
 
 BEGIN { unshift @INC, "$FindBin::Bin/../lib" };
@@ -100,33 +107,28 @@ Mojolicious::Commands->start_app('<%= $class %>');
 package <%= $class %> {
 
     use Mojo::Base 'Mojolicious';
-    use Hash::Merge 'merge';
-
-    use Syntax::Collection::Basic;
+    use Config::FromHash;
     use Kavorka;
+    use Syntax::Collection::Basic;
 
     method startup {
         $self->setup;
 
         my $r = $self->routes;
-        $r->namespaces(['<%= $class %>::Controller']);
 
         $r->get('/*message')->to('example#index');
     }
 
     method setup($app:) {
-        my $config_standard = $app->plugin('config', file => 'share/config.conf');
-        my $config_secret = $app->plugin('config', file => 'share/config-secret.conf');
-        my $config = merge($config_secret => $config_standard);
-
+        $app->plugin(config => { default => Config::FromHash->new(filenames => ['share/config-secret.conf', 'share/config.conf'])->data });
+        
         $app->secrets($config->{'secrets'});
         $app->defaults(layout => 'default');
 
         $app->helper(db => sub {
-            <%= $class %>::DB->new(config => $config->{'db'});
-        })
+            <%= $class %>::DB->connect(config => $config->{'db'});
+        });
     }
-
 }
 
 
@@ -148,14 +150,13 @@ package <%= $class %> {
 % my $class = shift;
 package <%= $class %> {
     use base 'DBIx::Class::Schema';
-
     use Syntax::Collection::Basic;
-    use Kavorka;
+
+    our $VERSION = 1;
 
     __PACKAGE__->load_namespaces;
 
 }
-
 
 @@ db
 % my $class = shift;
@@ -163,25 +164,25 @@ package <%= $class %> {
 package <%= $class %> {
     use Mojo::Base -base;
     use Syntax::Collection::Basic;
-    use Kavorka;
 
     has 'config';
     has 'schema';
 
     use vars $AUTOLOAD;
 
-    after new {
-        $self->schema = <%= $app_class %>::Schema->connect(
+    sub connect {
+        my $self = shift;
+
+        $self->schema(<%= $app_class %>::Schema->connect(
             $self->config->{'dsn'},
             $self->config->{'user'},
             $self->config->{'password'},
-            $self->config->{'extra'}
-        );
+            $self->config->{'extra'},
+        ));
     }
 
-    method AUTOLOAD {
-        my $resultset = $AUTOLOAD;
-        $resultset =~ s{^<%= $app_class %>::DB::}{};
+    sub AUTOLOAD {
+        my $resultset = substr $AUTOLOAD, 0 => <%= (length '$app_class') + 6 %>; # basically s{^<%= $app_class %>::DB::}{}
         return $self->schema->resultset($resultset);
     }
 
@@ -215,7 +216,7 @@ package <%= $class %> {
 
 @@ result
 % my $class = shift;
-% my $base = $class; $base =~ s{^(\w+).*}{$1};
+% my $app_class = shift;
 package <%= $class %> {
     use parent 'DBIx::Class::Core';
 
@@ -226,18 +227,26 @@ package <%= $class %> {
         InflateColumn::DateTime
     /);
 
-    sub default_result_namespace { '<%= $base %>::Schema::Result' }
+    sub default_result_namespace { '<%= $app_class %>::Schema::Result' }
 
 }
 
 @@ resultset
 % my $class = shift;
 package <%= $class %> {
-    use base 'DBIx::Class::ResultSet';
-
+    use Moose;
+    use namespace::sweep;
+    use MooseX::NonMoose;
     use Syntax::Collection::Basic;
+    use Moops;
 
+    extends 'DBIx::Class::ResultSet';
+
+    sub BUILDARGS { $_[2] }
+
+    __PACKAGE__->meta->make_immutable;
 }
+
 
 
 @@ dbdeploy
